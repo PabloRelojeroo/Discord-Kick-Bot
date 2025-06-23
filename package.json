@@ -1,0 +1,30 @@
+{
+    "name": "discord-kick-stream-bot",
+    "version": "1.0.0",
+    "description": "Bot de Discord desarrollado por PabloRelojero para monitorear un stream en kick",
+    "main": "bot.js",
+    "scripts": {
+      "start": "node index.js",
+      "dev": "nodemon index.js"
+    },
+    "dependencies": {
+      "discord.js": "^14.14.1",
+      "express": "^4.18.2",
+      "axios": "^1.6.0"
+    },
+    "devDependencies": {
+      "nodemon": "^3.0.2"
+    },
+    "engines": {
+      "node": ">=18.0.0"
+    },
+    "keywords": [
+      "discord",
+      "bot",
+      "kick",
+      "stream",
+      "notification"
+    ],
+    "author": "PabloRelojero",
+    "license": "MIT"
+  }

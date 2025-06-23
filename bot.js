@@ -2,16 +2,17 @@ const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder
 const express = require('express');
 const axios = require('axios');
 
+// Configuración
 const config = {
     discord: {
         token: process.env.DISCORD_TOKEN,
         clientId: process.env.DISCORD_CLIENT_ID,
         guildId: process.env.DISCORD_GUILD_ID,
-        channelId: process.env.DISCORD_CHANNEL_ID
+        channelId: process.env.DISCORD_CHANNEL_ID 
     },
     kick: {
         username: 'selkie777',
-        checkInterval: 6000
+        checkInterval: 90000 
     },
     port: process.env.PORT || 3000
 };
@@ -42,46 +43,79 @@ app.get('/health', (req, res) => {
     res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-
 async function getKickStreamInfo(username) {
     try {
-        const response = await axios.get(`https://kick.com/api/v2/channels/${username}`, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            },
-            timeout: 10000
-        });
+        // Intentar primero con la API v2
+        let response;
+        try {
+            response = await axios.get(`https://kick.com/api/v2/channels/${username}`, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Referer': 'https://kick.com/',
+                    'Origin': 'https://kick.com'
+                },
+                timeout: 15000
+            });
+        } catch (apiError) {
+            console.log('API v2 falló, intentando con v1...');
+            response = await axios.get(`https://kick.com/api/v1/channels/${username}`, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Referer': 'https://kick.com/',
+                    'Origin': 'https://kick.com'
+                },
+                timeout: 15000
+            });
+        }
 
         const data = response.data;
         
-        if (!data || !data.livestream) {
+        if (!data) {
+            console.log('No se recibieron datos del canal');
             return null;
         }
 
-        const stream = data.livestream;
+        // Verificar estructura de datos (puede variar entre v1 y v2)
+        const stream = data.livestream || data;
+        
+        if (!stream) {
+            console.log('No hay información de livestream');
+            return null;
+        }
+
+        const isLive = stream.is_live || false;
+        
         return {
-            isLive: stream.is_live,
-            title: stream.session_title || 'Sin título',
-            game: stream.categories?.[0]?.name || 'Sin categoría',
+            isLive: isLive,
+            title: stream.session_title || stream.title || 'Sin título',
+            game: stream.categories?.[0]?.name || stream.category?.name || 'Sin categoría',
             viewers: stream.viewer_count || 0,
             thumbnail: stream.thumbnail || null,
             streamUrl: `https://kick.com/${username}`
         };
     } catch (error) {
-        console.error('Error obteniendo info del stream:', error.message);
+        console.error('Error obteniendo info del stream:', error.response?.status || error.message);
+        if (error.response?.status === 403) {
+            console.log('Acceso bloqueado por Kick - intentando de nuevo en el próximo ciclo');
+        }
         return null;
     }
 }
 
-
 function createStreamEmbed(streamInfo) {
     const embed = new EmbedBuilder()
         .setTitle(`🔴 ${streamInfo.title}`)
-        .setDescription(`**${config.kick.username}**ESTA ON EN KICK !!`)
+        .setDescription(`**${config.kick.username}** ESTA ON !!`)
         .addFields(
             { name: 'Juego', value: streamInfo.game, inline: true },
             { name: 'Viewers', value: streamInfo.viewers.toString(), inline: true },
-            { name: 'Platform', value: 'Kick', inline: true }
+            { name: 'Plataforma', value: 'Kick', inline: true }
         )
         .setColor(0x53FC18)
         .setFooter({ text: 'Kick Stream Notification' })
@@ -115,7 +149,7 @@ async function sendStreamNotification(streamInfo) {
         const button = createStreamButton(streamInfo.streamUrl);
 
         await channel.send({
-            content: `🚨 **${config.kick.username}** acaba de empezar a stremear !!`,
+            content: `🚨 **${config.kick.username}** acaba de arrancar stream !!`,
             embeds: [embed],
             components: [button]
         });
@@ -127,25 +161,32 @@ async function sendStreamNotification(streamInfo) {
 }
 
 async function monitorStream() {
-    const streamInfo = await getKickStreamInfo(config.kick.username);
-    
-    if (!streamInfo) {
-        console.log('No se pudo obtener información del stream');
-        return;
-    }
+    try {
+        const streamInfo = await getKickStreamInfo(config.kick.username);
+        
+        if (!streamInfo) {
+            console.log('No se pudo obtener informacion del stream - reintentando en el proximo ciclo');
+            return;
+        }
 
-    if (streamInfo.isLive && !streamState.isLive) {
-        console.log(`${config.kick.username} se conectó!`);
-        streamState.isLive = true;
-        streamState.lastNotification = Date.now();
-        await sendStreamNotification(streamInfo);
-    }
-    else if (!streamInfo.isLive && streamState.isLive) {
-        console.log(`${config.kick.username} se desconectó`);
-        streamState.isLive = false;
+        console.log(`Estado del stream: ${streamInfo.isLive ? 'EN VIVO' : 'OFFLINE'} - Viewers: ${streamInfo.viewers}`);
+
+        if (streamInfo.isLive && !streamState.isLive) {
+            console.log(`🔴 ${config.kick.username} se conecto!`);
+            streamState.isLive = true;
+            streamState.lastNotification = Date.now();
+            await sendStreamNotification(streamInfo);
+        }
+        else if (!streamInfo.isLive && streamState.isLive) {
+            console.log(`⚫ ${config.kick.username} se desconecto`);
+            streamState.isLive = false;
+        }
+    } catch (error) {
+        console.error('Error en monitorStream:', error.message);
     }
 }
 
+// Comandos slash
 const commands = [
     new SlashCommandBuilder()
         .setName('test-stream')
@@ -158,6 +199,11 @@ const commands = [
 
 async function registerCommands() {
     try {
+        if (!config.discord.clientId) {
+            console.log('CLIENT_ID no configurado, saltando registro de comandos');
+            return;
+        }
+
         const rest = new REST({ version: '10' }).setToken(config.discord.token);
         
         console.log('Registrando comandos slash...');
@@ -167,16 +213,17 @@ async function registerCommands() {
                 Routes.applicationGuildCommands(config.discord.clientId, config.discord.guildId),
                 { body: commands }
             );
+            console.log('Comandos de guild registrados exitosamente');
         } else {
             await rest.put(
                 Routes.applicationCommands(config.discord.clientId),
                 { body: commands }
             );
+            console.log('Comandos globales registrados exitosamente');
         }
-        
-        console.log('Comandos registrados exitosamente');
     } catch (error) {
         console.error('Error registrando comandos:', error);
+        console.log('El bot funcionará sin comandos slash. Verifica tu DISCORD_CLIENT_ID');
     }
 }
 
@@ -197,9 +244,10 @@ client.on('interactionCreate', async interaction => {
     const { commandName } = interaction;
 
     if (commandName === 'test-stream') {
+        // Crear un embed de prueba
         const testStreamInfo = {
-            title: 'Stream de Prueba',
-            game: 'Juego de Prueba',
+            title: 'Stream de prueba - funcando',
+            game: 'Juego de test',
             viewers: 42,
             thumbnail: 'https://via.placeholder.com/400x225/53FC18/FFFFFF?text=KICK+STREAM',
             streamUrl: `https://kick.com/${config.kick.username}`
@@ -261,12 +309,14 @@ async function start() {
         if (!config.discord.token) {
             throw new Error('DISCORD_TOKEN no está configurado');
         }
-        if (!config.discord.clientId) {
-            throw new Error('DISCORD_CLIENT_ID no está configurado');
-        }
         if (!config.discord.channelId) {
             throw new Error('DISCORD_CHANNEL_ID no está configurado');
         }
+
+        console.log('Iniciando bot...');
+        console.log(`Monitoreando: ${config.kick.username}`);
+        console.log(`Canal notificaciones: ${config.discord.channelId}`);
+        console.log(`Client ID: ${config.discord.clientId ? 'Configurado' : 'No configurado (comandos deshabilitados)'}`);
 
         app.listen(config.port, () => {
             console.log(`Servidor HTTP ejecutándose en puerto ${config.port}`);
@@ -274,7 +324,7 @@ async function start() {
 
         await client.login(config.discord.token);
     } catch (error) {
-        console.error('Error iniciando el bot:', error);
+        console.error('❌ Error iniciando el bot:', error.message);
         process.exit(1);
     }
 }
